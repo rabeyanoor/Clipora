@@ -1,0 +1,11 @@
+node_modules/
+tests/*.png
+tests/export-output.mp4
+.history/
+android/build/
+android/out/
+android/keystore/
+
+# Wrangler cache
+server/.wrangler/
+Pasted image.png
