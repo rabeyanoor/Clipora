@@ -1,0 +1,20 @@
+{
+  "id": "/",
+  "name": "Clipora – AI Video Editor",
+  "short_name": "Clipora",
+  "description": "Free AI-powered video editor for Reels, Shorts and TikTok. Trim, split, captions, text, music, filters, remove pauses and auto shorts. No watermark.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#fbf5e9",
+  "theme_color": "#fbf5e9",
+  "categories": ["photo", "video", "entertainment", "productivity"],
+  "lang": "en",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
