@@ -389,4 +389,31 @@ test('AI replies: JSON is extracted even inside code fences; offline plan splits
   const m = offlineMovie('A cat lived in Dhaka. It loved fish! আমি ভাত খাই।');
   assert.equal(m.scenes.length, 3);
   assert.equal(m.scenes[2].visual, 'আমি ভাত খাই।');
+  const short = offlineMovie('A robot finds a flower on Mars', 4);
+  assert.equal(short.scenes.length, 4);
+  assert.ok(short.scenes.every((s) => s.visual.startsWith('A robot finds a flower on Mars')));
+  assert.equal(offlineMovie('একটি বিড়াল', 3).scenes.length, 3);
+});
+
+test('Music library: licenses, Jamendo CORS links and Openverse results', async () => {
+  const { licenseLabel, isNonCommercial, fixUrl, mapOpenverse, credit } = await import('../js/music.js');
+  assert.equal(licenseLabel('by-nc-sa', '3.0'), 'CC BY-NC-SA 3.0');
+  assert.equal(licenseLabel('cc0'), 'CC0');
+  assert.equal(licenseLabel('http://creativecommons.org/licenses/by/4.0/'), 'CC BY 4.0');
+  assert.equal(licenseLabel('https://creativecommons.org/publicdomain/mark/1.0/'), 'Public domain');
+  assert.ok(isNonCommercial('CC BY-NC 3.0') && !isNonCommercial('CC BY 4.0'));
+  assert.equal(fixUrl('https://prod-1.storage.jamendo.com/?trackid=825607&format=mp32'), 'https://mp3l.jamendo.com/?trackid=825607&format=mp31');
+  assert.equal(fixUrl('https://upload.wikimedia.org/a.ogg'), 'https://upload.wikimedia.org/a.ogg');
+  const t = mapOpenverse({ id: 'x', title: 'Song', creator: 'Ana', duration: 171000, license: 'by', license_version: '4.0', source: 'jamendo', url: 'https://prod-1.storage.jamendo.com/?trackid=1&format=mp32', tags: [{ name: 'pop' }] });
+  assert.equal(t.duration, 171);
+  assert.equal(credit(t), '"Song" by Ana (CC BY 4.0) via Jamendo');
+});
+
+test('Export colors: RGB → BT.709 limited-range I420', async () => {
+  const { rgbaToI420 } = await import('../js/yuv.js');
+  const px = (r, g, b) => new Uint8Array(Array.from({ length: 4 }, () => [r, g, b, 255]).flat());
+  const yuv = (r, g, b) => [...rgbaToI420(px(r, g, b), 2, 2)].filter((_, i) => i === 0 || i >= 4);
+  assert.deepEqual(yuv(0, 0, 0), [16, 128, 128]);
+  assert.deepEqual(yuv(255, 255, 255), [235, 128, 128]);
+  assert.deepEqual(yuv(255, 0, 0), [63, 102, 240]); // BT.709 red
 });
