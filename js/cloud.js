@@ -9,6 +9,7 @@
 // Everything has an offline fallback, so the feature never fully breaks.
 
 import { scriptToScenes } from './storyboard.js';
+import { gatewayChat, gatewayImage } from './gateway.js';
 
 const TEXT_URL = 'https://text.pollinations.ai/openai';
 const IMAGE_URL = 'https://image.pollinations.ai/prompt/';
@@ -41,8 +42,29 @@ export function parseJsonReply(text) {
   return JSON.parse(s.slice(a, b + 1));
 }
 
-/** Chat completion; returns the reply text. */
+/** Chat completion; returns the reply text. Fast gateway (Groq/Gemini) first, Pollinations as backup. */
 export async function chat(messages, { signal, json = false, timeout = 60000 } = {}) {
+  try {
+    return await gatewayChat(messages, { json, signal });
+  } catch (e) {
+    if (signal?.aborted) throw e;
+  }
+  return pollinationsChat(messages, { signal, json, timeout });
+}
+
+// The free tier answers one request per user every ~10-20 s (HTTP 402/429 otherwise): wait and retry.
+async function pollinationsChat(messages, opts) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await pollinationsOnce(messages, opts);
+    } catch (e) {
+      if (!e.busy || attempt >= 2 || opts.signal?.aborted) throw e;
+      await new Promise((r) => setTimeout(r, 12000));
+    }
+  }
+}
+
+async function pollinationsOnce(messages, { signal, json, timeout }) {
   const ctl = new AbortController();
   signal?.addEventListener('abort', () => ctl.abort());
   const res = await withTimeout(
@@ -55,7 +77,7 @@ export async function chat(messages, { signal, json = false, timeout = 60000 } =
     timeout,
     ctl
   );
-  if (!res.ok) throw new Error(`AI text service: HTTP ${res.status}`);
+  if (!res.ok) throw Object.assign(new Error(`AI text service: HTTP ${res.status}`), { busy: res.status === 402 || res.status === 429 });
   const data = await res.json();
   return data.choices?.[0]?.message?.content || '';
 }
@@ -84,11 +106,25 @@ Reply ONLY with JSON: {"title": string, "character": string, "scenes": [{"narrat
   };
 }
 
-/** Offline fallback: one scene per sentence, the sentence itself is the picture prompt. */
-export function offlineMovie(idea) {
+/**
+ * Offline fallback. A story: one scene per sentence. A short idea: a simple
+ * story arc (opening → wish → struggle → turning point → ending) around it.
+ */
+export function offlineMovie(idea, count = 6) {
   const parts = scriptToScenes(idea);
-  const list = parts.length ? parts : [{ text: idea }];
-  return { title: '', character: '', scenes: list.slice(0, 24).map((p) => ({ narration: p.text, visual: p.text })) };
+  if (parts.length >= Math.min(3, count)) return { title: '', character: '', scenes: parts.slice(0, 24).map((p) => ({ narration: p.text, visual: p.text })) };
+  const topic = String(idea).trim().replace(/[.!?।]+$/, '');
+  const bn = /[\u0980-\u09FF]/.test(topic);
+  const arc = bn
+    ? [['গল্পের শুরু।', 'establishing wide shot, opening scene'], ['একটি স্বপ্ন জন্ম নেয়।', 'close-up, hopeful expression'], ['পথ সহজ ছিল না।', 'dramatic struggle, moody light'], ['তবু হার মানেনি।', 'determined, action shot'], ['অবশেষে সব বদলে গেল।', 'turning point, golden light'], ['আর এভাবেই গল্পটা শেষ হলো।', 'happy ending, wide shot, sunset']]
+    : [['It all began here.', 'establishing wide shot, opening scene'], ['A dream was born.', 'close-up, hopeful expression'], ['The road was not easy.', 'dramatic struggle, moody light'], ['But giving up was never an option.', 'determined, action shot'], ['Then everything changed.', 'turning point, golden light'], ['And that is how the story ends.', 'happy ending, wide shot, sunset']];
+  const n = Math.max(3, Math.min(count, arc.length));
+  const pick = Array.from({ length: n }, (_, i) => arc[Math.round((i * (arc.length - 1)) / (n - 1))]);
+  return {
+    title: topic.slice(0, 40),
+    character: '',
+    scenes: pick.map(([line, shot], i) => ({ narration: i === 0 ? `${topic}. ${line}` : line, visual: `${topic}, ${shot}` })),
+  };
 }
 
 // ---------- Hugging Face Spaces (Gradio REST API, works from the browser) ----------
@@ -157,7 +193,7 @@ async function fluxImage(prompt, { width, height, seed, signal, name }) {
 // Pollinations' free tier allows one picture at a time per user at ≤576×1024,
 // so requests are queued and spaced out.
 let pollQueue = Promise.resolve();
-const POLL_GAP = 4000;
+const POLL_GAP = 1200; // the free tier serves one picture at a time per user
 export function imageUrl(prompt, { width = 576, height = 1024, seed = 1 } = {}) {
   const s = Math.min(1, 1024 / Math.max(width, height));
   const q = new URLSearchParams({ width: Math.round(width * s), height: Math.round(height * s), seed });
@@ -166,12 +202,12 @@ export function imageUrl(prompt, { width = 576, height = 1024, seed = 1 } = {}) 
 function pollinationsImage(prompt, { width, height, seed, signal, name }) {
   const job = pollQueue.then(async () => {
     let lastErr;
-    for (let attempt = 0; attempt < 4; attempt++) {
+    for (let attempt = 0; attempt < 3; attempt++) {
       if (signal?.aborted) throw new Error('cancelled');
       const ctl = new AbortController();
       signal?.addEventListener('abort', () => ctl.abort());
       try {
-        const res = await withTimeout(fetch(imageUrl(prompt, { width, height, seed: seed + attempt }), { signal: ctl.signal }), 90000, ctl);
+        const res = await withTimeout(fetch(imageUrl(prompt, { width, height, seed: seed + attempt }), { signal: ctl.signal }), 45000, ctl);
         if (res.status === 402 || res.status === 429) throw Object.assign(new Error(`busy (HTTP ${res.status})`), { wait: true });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const blob = await res.blob();
@@ -180,7 +216,7 @@ function pollinationsImage(prompt, { width, height, seed, signal, name }) {
       } catch (e) {
         if (signal?.aborted) throw e;
         lastErr = e;
-        await new Promise((r) => setTimeout(r, (e.wait ? 8000 : 2000) * (attempt + 1)));
+        await new Promise((r) => setTimeout(r, (e.wait ? 5000 : 1500) * (attempt + 1)));
       }
     }
     throw lastErr;
@@ -191,7 +227,7 @@ function pollinationsImage(prompt, { width, height, seed, signal, name }) {
 
 let fluxDown = 0; // time until which FLUX is skipped (after quota / errors)
 
-/** Text → picture File. FLUX on Hugging Face first, Pollinations as backup. */
+/** Text → picture File. FLUX on Hugging Face first, then the AI gateway, then Pollinations. */
 export async function generateImage(prompt, { width = 768, height = 1344, seed = Math.floor(Math.random() * 1e9), signal, name = 'ai-image' } = {}) {
   const o = { width, height, seed, signal, name };
   if (Date.now() > fluxDown) {
@@ -202,6 +238,11 @@ export async function generateImage(prompt, { width = 768, height = 1344, seed =
       console.warn('[Clipora] FLUX Space unavailable, using backup', e);
       fluxDown = Date.now() + 5 * 60000;
     }
+  }
+  try {
+    return await gatewayImage(prompt, { seed, signal, name });
+  } catch (e) {
+    if (signal?.aborted) throw e;
   }
   try {
     return await pollinationsImage(prompt, o);
