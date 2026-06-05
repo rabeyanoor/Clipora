@@ -315,6 +315,12 @@ public class MainActivity extends Activity {
             }
         }
 
+        /** Caption (title, music credit, hashtags) sent along with the next shared file. */
+        @JavascriptInterface
+        public void setShareText(String text) {
+            shareText = text;
+        }
+
         @JavascriptInterface
         public void keepAwake(boolean on) {
             runOnUiThread(() -> {
@@ -362,10 +368,13 @@ public class MainActivity extends Activity {
         });
     }
 
+    volatile String shareText = null;
+
     void share(Uri uri, String type) {
         Intent send = new Intent(Intent.ACTION_SEND);
         send.setType(type);
         send.putExtra(Intent.EXTRA_STREAM, uri);
+        if (shareText != null && !shareText.isEmpty()) send.putExtra(Intent.EXTRA_TEXT, shareText);
         send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         runOnUiThread(() -> {
             try {
