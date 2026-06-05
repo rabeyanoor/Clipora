@@ -7,7 +7,7 @@ const STR = {
     newProject: 'New project',
     yourProjects: 'Your projects',
     noProjects: 'No projects yet. Tap “New project” and pick videos or photos.',
-    privacy: 'Your videos are edited on your device. AI Movie and AI Image send only your text prompt to free cloud AI.',
+    privacy: 'Your videos are edited on your device. AI Movie and AI Image send only your text prompt to cloud AI. Fast AI captions send the sound of the video to a cloud AI (Groq) and fall back to on-device AI.',
     untitled: 'My video',
     export: 'Export',
     fasterThanRealtime: 'real-time speed',
