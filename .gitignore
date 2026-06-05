@@ -5,3 +5,7 @@ tests/export-output.mp4
 android/build/
 android/out/
 android/keystore/
+
+# Wrangler cache
+server/.wrangler/
+Pasted image.png
