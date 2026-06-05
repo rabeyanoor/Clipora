@@ -57,9 +57,7 @@ The web app is bundled inside the APK and served from a secure origin, so it wor
 
 ## Publish to the Play Store
 
-1. **Host it on HTTPS.** Free option, a Hugging Face static Space:
-   `HF_TOKEN=hf_xxx ./deploy-hf.sh` → `https://rabeya100x-clipora.static.hf.space`
-   (GitHub Pages, Netlify and Cloudflare Pages work too.)
+1. **Host it on HTTPS.** Free options: GitHub Pages, Netlify or Cloudflare Pages.
 2. Open **https://www.pwabuilder.com**, paste the URL, choose **Android → Generate package**. This gives you a signed `.aab` (Trusted Web Activity) plus `assetlinks.json`.
 3. Put `assetlinks.json` in `.well-known/` in this folder and redeploy, so the app opens full-screen without the browser bar.
 4. Create a Google Play developer account ($25 one-time), upload the `.aab`, and fill in the store listing (icon: `icons/icon-512.png`), privacy policy and content rating.

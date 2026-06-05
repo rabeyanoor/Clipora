@@ -9,3 +9,9 @@ android/keystore/
 # Wrangler cache
 server/.wrangler/
 Pasted image.png
+
+# Local only
+test.sh
+deploy-hf.sh
+space/
+icons/maskable.svg
