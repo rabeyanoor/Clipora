@@ -976,16 +976,17 @@ export class Engine {
     return this._exportRealtime(opts);
   }
 
-  async _exportFast({ shortSide = 720, fps = 30, onProgress = () => {}, signal } = {}) {
+  async _exportFast({ shortSide = 720, fps = 30, onProgress = () => {}, signal, yuv } = {}) {
     this.pause();
     const p = this.project;
     if (!this.duration) throw new Error('Nothing to export');
-    const [W, H] = canvasSize(p.aspect, null, shortSide);
+    // Multiples of 8: what video encoders and the GPU color conversion like best.
+    const [W, H] = canvasSize(p.aspect, null, shortSide).map((v) => Math.round(v / 8) * 8);
     this.exporting = true;
     this.canvas.width = W;
     this.canvas.height = H;
     try {
-      return await exportFast(this, { W, H, fps, shortSide, onProgress, signal });
+      return await exportFast(this, { W, H, fps, shortSide, onProgress, signal, yuv });
     } finally {
       this.exporting = false;
       this.resizePreview();
