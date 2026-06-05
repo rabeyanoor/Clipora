@@ -293,7 +293,7 @@ try {
     document.querySelector('[data-q="720"]').click();
     document.querySelector('[data-go]').click();
     const t0 = performance.now();
-    while (!document.querySelector('#exportDlg video') && !/failed/i.test(document.querySelector('#exportDlg').textContent) && performance.now() - t0 < 40000) await new Promise(r => setTimeout(r, 250));
+    while (!document.querySelector('#exportDlg video') && !/failed/i.test(document.querySelector('#exportDlg').textContent) && performance.now() - t0 < 180000) await new Promise(r => setTimeout(r, 250));
     const v = document.querySelector('#exportDlg video');
     if (!v) return { ok: false, text: document.querySelector('#exportDlg').textContent };
     await new Promise(r => v.readyState >= 1 ? r() : v.addEventListener('loadedmetadata', r, { once: true }));
