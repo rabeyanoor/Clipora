@@ -4,6 +4,12 @@
 
 import { decodePcm16k } from './analysis.js';
 import { captionsFromScript } from './time.js';
+import { hasGateway, gatewayTranscribe } from './gateway.js';
+import { encodeWav } from './ai.js';
+
+// Whisper language names (used on device) → ISO codes (used by the cloud API).
+const ISO = { english: 'en', bengali: 'bn', hindi: 'hi', arabic: 'ar', spanish: 'es', urdu: 'ur' };
+const CLOUD_CHUNK_S = 600; // 10 min of 16 kHz 16-bit WAV ≈ 19 MB, under the 24 MB request limit
 
 const TF_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1/dist/transformers.min.js';
 export const MODEL = 'onnx-community/whisper-base';
@@ -39,9 +45,22 @@ async function getPipe(onProgress) {
 }
 
 // Returns [{start, end, text}] in source-media seconds.
+// Fast path: Groq Whisper through the AI gateway (a few seconds), else on device.
 export async function transcribeMedia(media, { language = 'auto', onProgress } = {}) {
   const key = `${media.id}:${language}`;
   if (transcripts.has(key)) return transcripts.get(key);
+  if (hasGateway()) {
+    try {
+      onProgress?.({ stage: 'listen', value: 0 });
+      const pcm = await decodePcm16k(media.id, media.blob);
+      if (pcm.length / 16000 > MAX_MINUTES * 60) throw new Error(`Video longer than ${MAX_MINUTES} minutes`);
+      const chunks = await cloudTranscribe(pcm, ISO[language], onProgress);
+      transcripts.set(key, chunks);
+      return chunks;
+    } catch (e) {
+      console.warn('[Clipora] cloud captions unavailable, using on-device Whisper', e);
+    }
+  }
   const pipe = await getPipe(onProgress);
   onProgress?.({ stage: 'listen', value: 0 });
   const pcm = await decodePcm16k(media.id, media.blob);
@@ -55,6 +74,19 @@ export async function transcribeMedia(media, { language = 'auto', onProgress } =
     .filter((c) => c.text && c.end > c.start && !/^[([♪].*[)\]♪]$/.test(c.text)); // drop "(music)", "[applause]" etc.
   transcripts.set(key, chunks);
   return chunks;
+}
+
+async function cloudTranscribe(pcm, language, onProgress) {
+  const out = [];
+  const step = CLOUD_CHUNK_S * 16000;
+  for (let i = 0; i < pcm.length; i += step) {
+    const part = pcm.subarray(i, Math.min(pcm.length, i + step));
+    const segs = await gatewayTranscribe(new File([encodeWav(part, 16000)], 'audio.wav', { type: 'audio/wav' }), { language });
+    const off = i / 16000;
+    for (const s of segs) out.push({ start: off + s.start, end: off + s.end, text: s.text });
+    onProgress?.({ stage: 'listen', value: Math.min(1, (i + step) / pcm.length) });
+  }
+  return out.filter((c) => c.text && c.end > c.start && !/^[([♪].*[)\]♪]$/.test(c.text));
 }
 
 // Map source-time transcript chunks of each clip onto the edited timeline.
