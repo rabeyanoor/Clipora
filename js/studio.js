@@ -62,7 +62,13 @@ export function openMovieDialog(deps, preset = {}) {
         await deps.buildMovieProject(st, o);
         d.close();
         const notes = st.notes;
-        deps.toast(notes.includes('animateFailed') ? '🎬 Movie ready! (free AI video quota used up: some scenes are still pictures)' : notes.includes('voiceFailed') ? '🎬 Movie ready! (voice could not load: captions only)' : '🎬 Your AI movie is ready! Tap ▶ to watch.', 6000);
+        deps.toast(
+          notes.includes('voiceFailed') ? '🎬 Movie ready! (voice could not load: captions only)'
+            : notes.includes('cards') ? '🎬 Movie ready! (AI pictures were busy: some scenes are title cards; tap a scene and try AI Image)'
+            : notes.includes('animateFailed') ? '🎬 Movie ready! (free AI video quota used up: some scenes are still pictures)'
+            : '🎬 Your AI movie is ready! Tap ▶ to watch.',
+          6000
+        );
       } catch (err) {
         if (ctl.signal.aborted) d.close();
         else {
@@ -79,7 +85,7 @@ export function openMovieDialog(deps, preset = {}) {
   d.showModal();
 }
 
-const STAGES = { plan: '✍️ Writing the story…', images: '🎨 Drawing the scenes…', voice: '🗣 Recording the narration…', animate: '🎞 Animating scenes with AI video…', done: '✅ Done' };
+const STAGES = { plan: '✍️ Writing the story…', images: '🎨 Drawing the scenes and 🗣 recording the voice…', voice: '🗣 Finishing the narration…', animate: '🎞 Animating scenes with AI video…', done: '✅ Done' };
 const urls = new WeakMap();
 const urlOf = (f) => {
   if (!urls.has(f)) urls.set(f, URL.createObjectURL(f));
@@ -90,7 +96,9 @@ function progress(d, st) {
   const n = st.scenes.length || 1;
   const drawn = st.scenes.filter((s) => s.image || s.status === 'failed').length;
   const voiced = st.scenes.filter((s) => s.voice).length;
-  const pct = st.stage === 'plan' ? 6 : st.stage === 'images' ? 10 + (60 * drawn) / n : st.stage === 'voice' ? 70 + (20 * voiced) / n : st.stage === 'animate' ? 90 : 100;
+  const withVoice = st.scenes.some((s) => s.voice) || st.stage === 'voice' || st.voiceDownload != null;
+  const work = drawn + (withVoice ? voiced : 0);
+  const pct = st.stage === 'plan' ? 6 : st.stage === 'images' || st.stage === 'voice' ? 10 + (80 * work) / (n * (withVoice ? 2 : 1)) : st.stage === 'animate' ? 90 : 100;
   d.innerHTML = `<div class="studio-head"><span class="spark pulse">✨</span><div><h3>${esc(st.title || 'AI Movie')}</h3><p class="hint">${STAGES[st.stage]}${st.voiceDownload != null ? ` (voice model ${Math.round(st.voiceDownload * 100)}%, first time only)` : ''}</p></div></div>
     <div class="progress"><i style="width:${pct.toFixed(1)}%"></i></div>
     <div class="scene-grid">${st.scenes
