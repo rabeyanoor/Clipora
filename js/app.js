@@ -10,6 +10,8 @@ import * as DB from './storage.js';
 import { Engine } from './engine.js';
 import { preloadFastExport } from './fastexport.js';
 import { openMovieDialog, openImageDialog } from './studio.js';
+import { openMusicDialog } from './musicui.js';
+import { credit } from './music.js';
 import { assembleMovie } from './movie.js';
 import { transcribeMedia, toTimeline } from './transcribe.js';
 import { t, getLang } from './i18n.js';
@@ -581,14 +583,16 @@ function panelMusic() {
   const m = project.music;
   const muteAll = `<button class="chip ${project.clips.length && project.clips.every((c) => c.muted) ? 'on' : ''}" data-act="muteOriginal" type="button">${t('muteOriginal')}</button>`;
   let h = `<div class="row scroll tools-row">
-    <button class="tool" data-act="addMusic" type="button">${icon('music', 20)}<span>${m ? t('replace') : t('addMusic')}</span></button>
+    <button class="tool hot" data-act="musicLib" type="button">${icon('music', 20)}<span>🌍 World music</span></button>
+    <button class="tool" data-act="addMusic" type="button">${icon('music', 20)}<span>${m ? 'From phone' : t('addMusic')}</span></button>
+    <button class="tool" data-act="sfxLib" type="button">${icon('effects', 20)}<span>Sound FX</span></button>
     <button class="tool ${recording ? 'rec' : ''}" data-act="record" type="button">${icon('mic', 20)}<span>${recording ? '■ Stop' : 'Voiceover'}</span></button>
     <button class="tool" data-act="boostAll" type="button">${icon('boost', 20)}<span>Boost all</span></button>
     <button class="tool" data-act="denoiseAll" type="button">${icon('mute', 20)}<span>Reduce noise</span></button>
     <button class="tool" data-act="extract" type="button">${icon('extract', 20)}<span>Extract audio</span></button></div>`;
   if (m) {
     const rec = mediaMap.get(m.mediaId);
-    h += `<div class="row"><b>♪ ${esc(rec?.name || 'Music')}</b></div>
+    h += `<div class="row"><b>♪ ${esc(rec?.name || 'Music')}</b></div>${m.credit ? `<p class="hint credit">© ${esc(m.credit)} <button class="chip sm" data-act="copyCredit" type="button">Copy credit</button></p>` : ''}
     ${field(t('volume'), 'musicVol', Math.round((m.volume ?? 1) * 100), 0, 300, 1, `${Math.round((m.volume ?? 1) * 100)}%`)}
     ${field(t('startAt'), 'musicOffset', m.offset || 0, 0, Math.max(0, (rec?.duration || 1) - 0.5), 0.1, fmt(m.offset || 0))}
     <div class="row"><button class="chip ${m.loop ? 'on' : ''}" data-act="musicLoop" type="button">${t('loop')}</button>
@@ -771,9 +775,12 @@ async function removePauses(p, scope) {
 async function autoShorts(p, length) {
   const vids = targetVideoClips(p, 'selected');
   const c = vids[0];
-  if (!c) return p;
+  if (!c) {
+    toast('Select a video clip first (tap it on the timeline)', 4000);
+    return p;
+  }
   if (S.clipDuration(c) <= length + 1) {
-    toast(t('nothing'));
+    toast(`This clip is only ${Math.round(S.clipDuration(c))}s: it is already shorter than ${length}s`, 4500);
     return p;
   }
   const an = await loudnessFor(c);
@@ -1043,6 +1050,16 @@ const ACT = {
   style: (el) => runActions(STYLES[el.dataset.v]),
   delCap: (el) => commit(S.removeItem(project, 'captions', el.dataset.id)),
   addMusic: () => $('#musicInput').click(),
+  musicLib: () => openMusicDialog(musicDeps),
+  sfxLib: () => openMusicDialog(sfxDeps, { kind: 'sfx' }),
+  async copyCredit() {
+    try {
+      await navigator.clipboard.writeText(project.music.credit);
+      toast('📋 Credit copied: paste it in your post caption');
+    } catch {
+      toast(project.music.credit, 6000);
+    }
+  },
   removeMusic: () => commit(S.setProject(project, { music: null })),
   musicLoop: () => commit(S.setProject(project, { music: { ...project.music, loop: !project.music.loop } })),
   muteOriginal() {
@@ -1051,7 +1068,10 @@ const ACT = {
   },
   smartGo() {
     const text = $('#smartBox').value.trim();
-    if (!text) return;
+    if (!text) {
+      $('#smartBox').focus();
+      return toast('Type what you want, e.g. "remove pauses and add captions"', 4000);
+    }
     $('#smartBox').value = '';
     const last = chat[chat.length - 1];
     if (last?.status === 'pending') last.status = 'cancelled';
@@ -1698,10 +1718,11 @@ async function runExport(q, fps = 30) {
     exportCtl = null;
     Native?.keepAwake(false);
     if (!res) return d.close();
+    if (res.stats) console.info('[Clipora] export stats (ms)', JSON.stringify(res.stats));
     if (lastExport) URL.revokeObjectURL(lastExport.url);
     const name = `${project.name || 'Clipora'}.${res.ext}`.replace(/[\\/:*?"<>|]+/g, '_');
     lastExport = { ...res, name, url: URL.createObjectURL(res.blob) };
-    const canShare = !!Native || navigator.canShare?.({ files: [new File([res.blob], name, { type: res.blob.type })] });
+    const canShare = true; // falls back to saving the file when the browser can't share files
     d.innerHTML = `<h3>🎉 ${t('done')}</h3><video src="${lastExport.url}" controls playsinline></video>
       <p class="hint">${(res.blob.size / 1048576).toFixed(1)} MB · ${res.ext.toUpperCase()}${res.stats ? ` · ⚡ ${(engine.duration / (res.stats.total / 1000)).toFixed(1)}× ${t('fasterThanRealtime')}` : ''}</p>
       <div class="row end"><button class="btn-ghost" data-close type="button">${t('close')}</button>
@@ -1715,13 +1736,56 @@ async function runExport(q, fps = 30) {
   }
 }
 
+/** Caption that travels with the shared video: title, music credit, hashtags. */
+function shareCaption() {
+  const tags = '#Reels #Shorts #TikTok #Clipora';
+  return [project?.name, project?.music?.credit ? `🎵 ${project.music.credit}` : '', tags].filter(Boolean).join('\n');
+}
+
 async function shareResult() {
   if (!lastExport) return;
-  if (Native) return saveNative(lastExport.blob, lastExport.name, true).catch((e) => toast(e.message));
+  const text = shareCaption();
+  if (Native) {
+    Native.setShareText?.(text);
+    return saveNative(lastExport.blob, lastExport.name, true).catch((e) => toast(e.message));
+  }
+  const file = new File([lastExport.blob], lastExport.name, { type: lastExport.blob.type });
+  if (navigator.canShare?.({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file], title: project?.name || lastExport.name, text });
+    } catch (e) {
+      if (e.name !== 'AbortError') toast(e.message || 'Could not share');
+    }
+    return;
+  }
+  // Browsers that can't share files (most computers): save it, copy the caption.
+  downloadBlob(lastExport.blob, lastExport.name);
   try {
-    await navigator.share({ files: [new File([lastExport.blob], lastExport.name, { type: lastExport.blob.type })], title: lastExport.name });
+    await navigator.clipboard.writeText(text);
   } catch {}
+  toast('💾 Video saved. Attach it in WhatsApp / Instagram / TikTok (caption copied).', 6000);
 }
+
+// ---------- Music library ----------
+const musicDeps = {
+  toast,
+  async useTrack(file, track) {
+    if (!project) return;
+    const [m] = await importFiles([file], 'audio');
+    if (!m) return;
+    commit(S.setProject(project, { music: { mediaId: m.id, volume: 0.8, offset: 0, loop: true, credit: credit(track) } }));
+    setTab('music');
+    toast(`🎵 "${track.title}" added`);
+  },
+};
+const sfxDeps = {
+  toast,
+  async useTrack(file, track) {
+    if (!project) return;
+    await addAudioFile(file, 'sfx');
+    toast(`💥 "${track.title}" added at ${fmt(engine.time)}`);
+  },
+};
 
 // ---------- AI Studio ----------
 const studioDeps = {
