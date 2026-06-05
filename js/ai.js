@@ -3,19 +3,20 @@
 
 const TF_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1/dist/transformers.min.js';
 export const TTS_MODEL = 'Xenova/mms-tts-eng';
-// Meta MMS voices per language. Quantized ones are ~38 MB; Bangla is full size (~110 MB, downloaded once).
+// Meta MMS voices per language. Full precision (~114 MB, downloaded once per language): in the browser it
+// speaks 2-3x faster than the 38 MB quantized version.
 export const TTS_MODELS = {
-  en: { model: TTS_MODEL, dtype: 'q8' },
+  en: { model: TTS_MODEL, dtype: 'fp32' },
   bn: { model: 'PRAMSSS/mms-tts-bengali-webgpu', dtype: 'fp32' },
-  hi: { model: 'Xenova/mms-tts-hin', dtype: 'q8' },
-  ar: { model: 'Xenova/mms-tts-ara', dtype: 'q8' },
-  es: { model: 'Xenova/mms-tts-spa', dtype: 'q8' },
-  fr: { model: 'Xenova/mms-tts-fra', dtype: 'q8' },
-  de: { model: 'Xenova/mms-tts-deu', dtype: 'q8' },
-  pt: { model: 'Xenova/mms-tts-por', dtype: 'q8' },
-  ru: { model: 'Xenova/mms-tts-rus', dtype: 'q8' },
-  ko: { model: 'Xenova/mms-tts-kor', dtype: 'q8' },
-  vi: { model: 'Xenova/mms-tts-vie', dtype: 'q8' },
+  hi: { model: 'Xenova/mms-tts-hin', dtype: 'fp32' },
+  ar: { model: 'Xenova/mms-tts-ara', dtype: 'fp32' },
+  es: { model: 'Xenova/mms-tts-spa', dtype: 'fp32' },
+  fr: { model: 'Xenova/mms-tts-fra', dtype: 'fp32' },
+  de: { model: 'Xenova/mms-tts-deu', dtype: 'fp32' },
+  pt: { model: 'Xenova/mms-tts-por', dtype: 'fp32' },
+  ru: { model: 'Xenova/mms-tts-rus', dtype: 'fp32' },
+  ko: { model: 'Xenova/mms-tts-kor', dtype: 'fp32' },
+  vi: { model: 'Xenova/mms-tts-vie', dtype: 'fp32' },
 };
 
 /** Guesses the language of a text from its script (Latin text → English). */
@@ -56,6 +57,12 @@ async function getPipe(task, model, onProgress, dtype = 'q8') {
     pipes.delete(key);
     throw e;
   }
+}
+
+/** Starts downloading a voice in the background (e.g. while the story is being written). */
+export function preloadVoice(lang, onProgress) {
+  const { model, dtype } = TTS_MODELS[lang] || TTS_MODELS.en;
+  return getPipe('text-to-speech', model, onProgress, dtype).then(() => true, () => false);
 }
 
 /** Text → spoken audio as a WAV File. `lang` defaults to the text's script. */
