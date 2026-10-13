@@ -68,3 +68,4 @@ The web app is bundled inside the APK and served from a secure origin, so it wor
 - Translated captions, AI voice-over (text-to-speech), auto-reframe that follows faces
 - Optional cloud account + paid "Pro" credits for heavy AI (only once there are real users)
 # Clipora
+# Clipora
