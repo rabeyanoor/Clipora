@@ -6,8 +6,9 @@
 // The result is a normal Clipora project, so everything stays editable.
 
 import { writeMovie, offlineMovie, generateImage, animateImage, LOOKS } from './cloud.js';
-import { speak, detectLang } from './ai.js';
+import { speak, detectLang, preloadVoice } from './ai.js';
 import { captionsFromScript } from './time.js';
+import { renderScene } from './storyboard.js';
 
 export const MOVIE_SIZES = { '9:16': [768, 1344], '16:9': [1344, 768], '1:1': [1024, 1024], '4:5': [896, 1120] };
 const TRANSITIONS = ['dissolve', 'zoom', 'fade', 'slide', 'blur', 'dissolve', 'push', 'flash'];
@@ -35,6 +36,8 @@ export async function makeMovie(opts, { onUpdate = () => {}, signal } = {}) {
   const st = { stage: 'plan', title: '', scenes: [], notes: [] };
   const emit = () => onUpdate(st);
   emit();
+  // The voice model downloads while the story is being written.
+  const voiceModel = voice ? preloadVoice(lang, (f) => ((st.voiceDownload = f < 1 ? f : null), emit())) : null;
 
   let plan;
   try {
@@ -42,7 +45,7 @@ export async function makeMovie(opts, { onUpdate = () => {}, signal } = {}) {
   } catch (e) {
     if (signal?.aborted) throw e;
     console.warn('[Clipora] story AI unavailable, using offline split', e);
-    plan = offlineMovie(idea);
+    plan = offlineMovie(idea, count);
     st.notes.push('offlinePlan');
   }
   st.title = plan.title;
@@ -53,45 +56,46 @@ export async function makeMovie(opts, { onUpdate = () => {}, signal } = {}) {
   const [width, height] = MOVIE_SIZES[aspect] || MOVIE_SIZES['9:16'];
   const seed = Math.floor(Math.random() * 1e8); // shared seed = more consistent look between scenes
   const style = LOOKS[look] || LOOKS.cinematic;
+  // Pictures come from the cloud while the narration is spoken on the phone:
+  // both run at the same time, so the movie is ready in max(pictures, voice).
+  const voiceJob = voice ? narrate(st, lang, voiceModel, emit, signal) : null;
   await pool(st.scenes, 3, async (s, i) => {
     if (signal?.aborted) return;
     s.status = 'drawing';
     emit();
     const prompt = [s.visual, plan.character, style].filter(Boolean).join('. ');
+    // Each picture gets at most ~2.5 minutes (busy free services); after that the scene becomes a title card.
+    const ctl = new AbortController();
+    const stop = () => ctl.abort();
+    signal?.addEventListener('abort', stop);
+    const timer = setTimeout(stop, 150000);
     try {
-      s.image = await generateImage(prompt, { width, height, seed: seed + i, signal, name: `scene-${i + 1}` });
+      s.image = await generateImage(prompt, { width, height, seed: seed + i, signal: ctl.signal, name: `scene-${i + 1}` });
       s.status = 'drawn';
     } catch (e) {
       if (signal?.aborted) return;
       console.warn('[Clipora] scene image failed', e);
       s.status = 'failed';
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', stop);
     }
     emit();
   });
   if (signal?.aborted) throw new Error('cancelled');
-
-  if (voice) {
+  // A picture the free services couldn't draw becomes a styled title card, so no scene is lost.
+  for (const [i, s] of st.scenes.entries()) {
+    if (s.image || !(s.narration || s.visual)) continue;
+    s.image = await renderScene(s.narration || s.visual, i, { width, height, total: st.scenes.length });
+    s.status = 'card';
+    st.notes.push('cards');
+  }
+  emit();
+  if (voiceJob) {
     st.stage = 'voice';
     emit();
-    for (const s of st.scenes) {
-      if (signal?.aborted) throw new Error('cancelled');
-      if (!s.narration) continue;
-      try {
-        // First use downloads the voice model; never let a stalled download freeze the movie.
-        const limit = st.voiceReady ? 90000 : 240000;
-        s.voice = await Promise.race([
-          speak(s.narration, { lang, onProgress: (f) => ((st.voiceDownload = f), emit()) }),
-          new Promise((_, rej) => setTimeout(() => rej(new Error('voice timed out')), limit)),
-        ]);
-        st.voiceReady = true;
-      } catch (e) {
-        console.warn('[Clipora] narration failed', e);
-        st.notes.push('voiceFailed');
-        break;
-      }
-      st.voiceDownload = null;
-      emit();
-    }
+    await voiceJob;
+    if (signal?.aborted) throw new Error('cancelled');
   }
 
   if (animate) {
@@ -117,6 +121,30 @@ export async function makeMovie(opts, { onUpdate = () => {}, signal } = {}) {
   st.stage = 'done';
   emit();
   return st;
+}
+
+/** Speaks every scene's narration (on device). Never throws: on failure the movie gets captions only. */
+async function narrate(st, lang, voiceModel, emit, signal) {
+  // First use downloads the voice model; never let a stalled download freeze the movie.
+  const ready = await Promise.race([voiceModel, new Promise((r) => setTimeout(() => r(false), 240000))]);
+  if (!ready) {
+    st.notes.push('voiceFailed');
+    st.voiceDownload = null;
+    return;
+  }
+  st.voiceDownload = null;
+  for (const s of st.scenes) {
+    if (signal?.aborted) return;
+    if (!s.narration) continue;
+    try {
+      s.voice = await Promise.race([speak(s.narration, { lang }), new Promise((_, rej) => setTimeout(() => rej(new Error('voice timed out')), 120000))]);
+    } catch (e) {
+      console.warn('[Clipora] narration failed', e);
+      st.notes.push('voiceFailed');
+      return;
+    }
+    emit();
+  }
 }
 
 /**

@@ -1,9 +1,9 @@
 // Offline cache for the app shell. Bump VERSION when files change.
-const VERSION = 'clipora-v5';
+const VERSION = 'clipora-v7';
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
   './js/app.js', './js/state.js', './js/engine.js', './js/commands.js', './js/time.js',
-  './js/analysis.js', './js/storage.js', './js/i18n.js', './js/transcribe.js', './js/scenes.js', './js/storyboard.js', './js/gfx.js', './js/sfx.js', './js/ai.js', './js/fastexport.js', './js/cloud.js', './js/movie.js', './js/studio.js',
+  './js/analysis.js', './js/storage.js', './js/i18n.js', './js/transcribe.js', './js/scenes.js', './js/storyboard.js', './js/gfx.js', './js/sfx.js', './js/ai.js', './js/fastexport.js', './js/cloud.js', './js/movie.js', './js/studio.js', './js/yuv.js', './js/music.js', './js/musicui.js', './js/config.js', './js/gateway.js', './js/vendor/mediabunny.min.js',
   './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png', './icons/maskable-512.png',
 ];
 

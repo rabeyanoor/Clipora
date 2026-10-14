@@ -5,13 +5,16 @@
 // (usually 3-10x faster than playing the video).
 
 import { clipAt, clipDuration } from './state.js';
+import { gpuConverter, cpuConverter, BT709 } from './yuv.js';
 
-const MB_URL = 'https://cdn.jsdelivr.net/npm/mediabunny@1.59.1/+esm';
+// Bundled with the app (no download before the first export); CDN only as a backup.
+const MB_LOCAL = new URL('./vendor/mediabunny.min.js', import.meta.url).href;
+const MB_CDN = 'https://cdn.jsdelivr.net/npm/mediabunny@1.59.1/+esm';
 const RATE = 48000;
 const MAX_AUDIO_SECONDS = 30 * 60; // above this the offline mix would use too much memory
 
 let mbPromise = null;
-const loadMb = () => (mbPromise ??= import(MB_URL).catch((e) => ((mbPromise = null), Promise.reject(e))));
+const loadMb = () => (mbPromise ??= import(MB_LOCAL).catch(() => import(MB_CDN)).catch((e) => ((mbPromise = null), Promise.reject(e))));
 
 /** Starts downloading the encoder library early (e.g. when the export dialog opens). */
 export function preloadFastExport() {
@@ -45,7 +48,7 @@ export function framePlan(p, fps) {
  * Exports the project. Returns { blob, ext } or null when cancelled.
  * Throws if the device can't encode; the caller then falls back to real-time recording.
  */
-export async function exportFast(engine, { W, H, fps, shortSide, onProgress = () => {}, signal }) {
+export async function exportFast(engine, { W, H, fps, shortSide, onProgress = () => {}, signal, yuv = 'auto' }) {
   const tStart = performance.now();
   const MB = await loadMb();
   const p = engine.project;
@@ -56,21 +59,34 @@ export async function exportFast(engine, { W, H, fps, shortSide, onProgress = ()
 
   const stats = { setup: performance.now() - tStart, audio: 0, decode: 0, draw: 0, encode: 0, frames: frames.length };
   let t0 = performance.now();
-  // 1. Audio mix (offline, much faster than real time). ~10% of the progress bar.
-  const mix = await renderAudioMix(engine, total, (f) => onProgress(f * 0.1));
-  stats.audio = performance.now() - t0;
-  if (signal?.aborted) return null;
+  // 1. Audio mix renders offline on the audio thread *while* the video encodes.
+  const mixDone = renderAudioMix(engine, total).then((m) => ((stats.audio = performance.now() - t0), m));
+  mixDone.catch(() => {});
 
-  // 2. Output file.
+  // 2. Output file. Frames go to the encoder as standard BT.709 limited-range
+  // YUV when the GPU can convert them quickly, so colors look the same in every
+  // player (gallery, WhatsApp, Instagram). Otherwise the canvas is encoded directly.
   const output = new MB.Output({ format: new MB.Mp4OutputFormat({ fastStart: 'in-memory' }), target: new MB.BufferTarget() });
-  const video = new MB.CanvasSource(engine.canvas, { codec: 'avc', bitrate, keyFrameInterval: 2, latencyMode: 'quality' });
+  const cfg = { codec: 'avc', bitrate, keyFrameInterval: 2, latencyMode: 'quality' };
+  // yuv: 'auto' (GPU if fast) | true (always convert, GPU or CPU) | false (canvas)
+  const toYuv = yuv === true ? gpuConverter(W, H) || cpuConverter(W, H) : yuv ? fastGpuConverter(engine.canvas, W, H) : null;
+  stats.yuv = !!toYuv;
+  const video = toYuv ? new MB.VideoSampleSource(cfg) : new MB.CanvasSource(engine.canvas, cfg);
+  const addFrame = toYuv
+    ? async (t, d) => {
+        const s = new MB.VideoSample(toYuv(engine.canvas), { format: 'I420', codedWidth: W, codedHeight: H, timestamp: t, duration: d, colorSpace: BT709 });
+        try {
+          await video.add(s);
+        } finally {
+          s.close();
+        }
+      }
+    : (t, d) => video.add(t, d);
   output.addVideoTrack(video, { frameRate: fps });
-  let audio = null;
-  const aac = mix && (await MB.canEncodeAudio('aac', { numberOfChannels: 2, sampleRate: RATE, bitrate: 160e3 }));
-  if (mix) {
-    audio = new MB.AudioBufferSource(aac ? { codec: 'aac', bitrate: 160e3 } : { codec: 'opus', bitrate: 128e3 });
-    output.addAudioTrack(audio);
-  }
+  // Always add a sound track (silent if needed): social apps handle that best.
+  const aac = await MB.canEncodeAudio('aac', { numberOfChannels: 2, sampleRate: RATE, bitrate: 160e3 });
+  const audio = new MB.AudioBufferSource(aac ? { codec: 'aac', bitrate: 160e3 } : { codec: 'opus', bitrate: 128e3 });
+  output.addAudioTrack(audio);
   await output.start();
 
   // 3. Decoders: one CanvasSink per video file, fed the exact timestamps each clip needs.
@@ -143,9 +159,9 @@ export async function exportFast(engine, { W, H, fps, shortSide, onProgress = ()
         engine.draw();
         t0 = performance.now();
         stats.draw += t0 - t1;
-        await video.add(f.t, dur);
+        await addFrame(f.t, dur);
         stats.encode += performance.now() - t0;
-        if (i % 4 === 0) onProgress(0.1 + 0.88 * (i / frames.length));
+        if (i % 4 === 0) onProgress(0.98 * (i / frames.length));
       }
       t0 = performance.now();
       await iter?.return?.();
@@ -158,7 +174,8 @@ export async function exportFast(engine, { W, H, fps, shortSide, onProgress = ()
       return null;
     }
     t0 = performance.now();
-    if (audio) await audio.add(mix);
+    const mix = await mixDone;
+    await audio.add(mix || new AudioBuffer({ numberOfChannels: 2, length: Math.max(1, Math.round(total * RATE)), sampleRate: RATE }));
     await output.finalize();
     stats.finalize = performance.now() - t0;
   } catch (e) {
@@ -170,6 +187,21 @@ export async function exportFast(engine, { W, H, fps, shortSide, onProgress = ()
   onProgress(1);
   stats.total = performance.now() - tStart;
   return { blob: new Blob([output.target.buffer], { type: 'video/mp4' }), ext: 'mp4', stats };
+}
+
+/** The GPU converter, but only if it is fast on this device (else colors via canvas). */
+function fastGpuConverter(canvas, W, H) {
+  if (W !== canvas.width || H !== canvas.height) return null;
+  const conv = gpuConverter(W, H);
+  if (!conv) return null;
+  try {
+    conv(canvas); // warm-up (shader compile)
+    const t = performance.now();
+    for (let i = 0; i < 3; i++) conv(canvas);
+    return (performance.now() - t) / 3 < 20 ? conv : null;
+  } catch {
+    return null;
+  }
 }
 
 // ---------- Audio ----------
